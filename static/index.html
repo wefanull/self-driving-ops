@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>SmartOps — demo MAPE-K en vivo</title>
+<style>
+  :root {
+    --gray:#5F5E5A; --gray-bg:#F1EFE8;
+    --blue:#185FA5; --blue-bg:#E6F1FB;
+    --purple:#534AB7; --purple-bg:#EEEDFE;
+    --coral:#993C1D; --coral-bg:#FAECE7;
+    --teal:#0F6E56; --teal-bg:#E1F5EE;
+    --red:#A32D2D; --red-bg:#FCEBEB;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: #FAFAF7; color: #2C2C2A;
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .subtitle { color: var(--gray); font-size: 14px; margin: 0 0 20px; }
+
+  .controls {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: #fff; border: 1px solid #E4E2D9; border-radius: 10px;
+    padding: 14px 18px; margin-bottom: 20px;
+  }
+  .controls label { font-size: 13px; color: var(--gray); display: flex; align-items: center; gap: 6px; }
+  .controls input[type=number] { width: 60px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 6px; }
+  button {
+    border: none; border-radius: 8px; padding: 8px 16px; font-size: 14px;
+    cursor: pointer; font-weight: 600;
+  }
+  #btnStart { background: var(--blue); color: #fff; }
+  #btnStart:disabled { background: #B4B2A9; cursor: not-allowed; }
+  #btnKnowledge { background: var(--gray-bg); color: var(--gray); }
+  #status { font-size: 13px; color: var(--gray); margin-left: auto; }
+
+  .board {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+  }
+  .col {
+    background: #fff; border: 1px solid #E4E2D9; border-radius: 10px;
+    padding: 12px; min-height: 320px; max-height: 480px; overflow-y: auto;
+  }
+  .col h2 {
+    font-size: 13px; margin: 0 0 10px; padding-bottom: 8px;
+    border-bottom: 2px solid currentColor; text-transform: uppercase; letter-spacing: .04em;
+  }
+  .col.monitor h2 { color: var(--blue); }
+  .col.analyze h2 { color: var(--purple); }
+  .col.plan h2 { color: var(--coral); }
+  .col.execute h2 { color: var(--teal); }
+
+  .card {
+    border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 12.5px;
+    animation: fadein .25s ease-in;
+  }
+  @keyframes fadein { from { opacity:0; transform: translateY(-4px);} to {opacity:1; transform: translateY(0);} }
+  .card .meta { font-weight: 600; margin-bottom: 2px; }
+  .card .detail { color: #444441; }
+
+  .monitor .card { background: var(--blue-bg); color: var(--blue); }
+  .analyze .card { background: var(--purple-bg); color: var(--purple); }
+  .analyze .card.anomaly { background: var(--red-bg); color: var(--red); }
+  .plan .card { background: var(--coral-bg); color: var(--coral); }
+  .plan .card.escalate { background: var(--red-bg); color: var(--red); }
+  .plan .card.none { background: var(--gray-bg); color: var(--gray); }
+  .execute .card { background: var(--teal-bg); color: var(--teal); }
+
+  .knowledge {
+    margin-top: 20px; background: #fff; border: 1px solid #E4E2D9;
+    border-radius: 10px; padding: 16px; display: none;
+  }
+  .knowledge h2 { font-size: 14px; margin: 0 0 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #EEECE3; }
+  th { color: var(--gray); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>SmartOps — bucle MAPE-K en vivo</h1>
+<p class="subtitle">Monitor &rarr; Analyze (Neumotron) &rarr; Plan (Arbiter) &rarr; Execute (Golang)</p>
+
+<div class="controls">
+  <label>Ciclos <input type="number" id="ciclos" value="6" min="1" max="20"></label>
+  <label><input type="checkbox" id="mock"> Modo mock (sin Ollama)</label>
+  <button id="btnStart" onclick="iniciar()">Iniciar demo</button>
+  <button id="btnKnowledge" onclick="verKnowledge()">Ver Knowledge</button>
+  <span id="status"></span>
+</div>
+
+<div class="board">
+  <div class="col monitor"><h2>Monitor</h2><div id="colMonitor"></div></div>
+  <div class="col analyze"><h2>Analyze · Neumotron</h2><div id="colAnalyze"></div></div>
+  <div class="col plan"><h2>Plan · Arbiter</h2><div id="colPlan"></div></div>
+  <div class="col execute"><h2>Execute · Go</h2><div id="colExecute"></div></div>
+</div>
+
+<div class="knowledge" id="knowledgePanel">
+  <h2>Knowledge (knowledge_log.json)</h2>
+  <div id="knowledgeContent"></div>
+</div>
+
+<script>
+let es = null;
+
+function card(cls, meta, detail) {
+  const el = document.createElement('div');
+  el.className = ('card ' + (cls || '')).trim();
+  const m = document.createElement('div');
+  m.className = 'meta';
+  m.textContent = meta;
+  const d = document.createElement('div');
+  d.className = 'detail';
+  d.textContent = detail;
+  el.appendChild(m);
+  el.appendChild(d);
+  return el;
+}
+
+function prepend(colId, el) {
+  const col = document.getElementById(colId);
+  col.insertBefore(el, col.firstChild);
+}
+
+function iniciar() {
+  if (es) { es.close(); }
+  ['colMonitor', 'colAnalyze', 'colPlan', 'colExecute'].forEach(id => {
+    document.getElementById(id).innerHTML = '';
+  });
+  document.getElementById('knowledgePanel').style.display = 'none';
+
+  const ciclos = document.getElementById('ciclos').value || 6;
+  const mock = document.getElementById('mock').checked;
+  const btn = document.getElementById('btnStart');
+  const status = document.getElementById('status');
+
+  btn.disabled = true;
+  status.textContent = mock ? 'Corriendo (modo mock)...' : 'Corriendo con Nemotron 3 Nano 4B...';
+
+  es = new EventSource(`/stream?ciclos=${ciclos}&mock=${mock}`);
+
+  es.addEventListener('monitor', e => {
+    const d = JSON.parse(e.data);
+    prepend('colMonitor', card('', `Ciclo ${d.ciclo} · ${d.nodo}`, `CPU ${d.cpu.toFixed(1)}% · RAM ${d.ram.toFixed(1)}%`));
+  });
+
+  es.addEventListener('analyze', e => {
+    const d = JSON.parse(e.data);
+    const cls = d.anomaly ? 'anomaly' : '';
+    const desc = (d.anomaly ? 'ANOMALIA: ' + d.type : 'sin anomalia') + ` · severidad ${d.severity.toFixed(2)}`;
+    prepend('colAnalyze', card(cls, `Ciclo ${d.ciclo} · ${d.nodo}`, desc));
+  });
+
+  es.addEventListener('plan', e => {
+    const d = JSON.parse(e.data);
+    let cls = '';
+    if (d.accion === 'sin_accion') cls = 'none';
+    if (d.accion === 'escalar_a_humano') cls = 'escalate';
+    prepend('colPlan', card(cls, `Ciclo ${d.ciclo} · ${d.nodo}`, `${d.accion} — ${d.razon}`));
+  });
+
+  es.addEventListener('execute', e => {
+    const d = JSON.parse(e.data);
+    prepend('colExecute', card('', `Ciclo ${d.ciclo} · ${d.nodo}`, `Goroutine: ${d.accion}`));
+  });
+
+  es.addEventListener('error', e => {
+    const d = JSON.parse(e.data);
+    status.textContent = 'Error: ' + d.mensaje;
+  });
+
+  es.addEventListener('done', () => {
+    status.textContent = 'Demo finalizada.';
+    btn.disabled = false;
+    es.close();
+    verKnowledge();
+  });
+
+  es.onerror = () => {
+    status.textContent = 'Conexion perdida con el servidor.';
+    btn.disabled = false;
+  };
+}
+
+function verKnowledge() {
+  fetch('/knowledge').then(r => r.json()).then(data => {
+    const panel = document.getElementById('knowledgePanel');
+    const content = document.getElementById('knowledgeContent');
+    content.innerHTML = '';
+    const nodos = Object.keys(data);
+    if (nodos.length === 0) {
+      const p = document.createElement('p');
+      p.style.color = '#888780';
+      p.textContent = 'Aun no hay remediaciones registradas.';
+      content.appendChild(p);
+    } else {
+      const table = document.createElement('table');
+      const trHead = document.createElement('tr');
+      ['Nodo', 'Ciclo', 'Accion', 'Razon'].forEach(title => {
+        const th = document.createElement('th');
+        th.textContent = title;
+        trHead.appendChild(th);
+      });
+      table.appendChild(trHead);
+
+      nodos.forEach(nodo => {
+        data[nodo].forEach(ev => {
+          const tr = document.createElement('tr');
+          [nodo, ev.ciclo, ev.accion, ev.razon].forEach(val => {
+            const td = document.createElement('td');
+            td.textContent = val;
+            tr.appendChild(td);
+          });
+          table.appendChild(tr);
+        });
+      });
+      content.appendChild(table);
+    }
+    panel.style.display = 'block';
+  });
+}
+</script>
+</body>
+</html>
